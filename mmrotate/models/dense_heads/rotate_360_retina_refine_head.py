@@ -3,11 +3,11 @@ import torch
 from mmcv.runner import force_fp32
 
 from ..builder import ROTATED_HEADS
-from .kfiou_rotate_retina_head import KFIoURRetinaHead
+from .rotated_360_retina_head import Rotated360RetinaHead
 
 
 @ROTATED_HEADS.register_module()
-class KFIoURRetinaRefineHead(KFIoURRetinaHead):
+class Rotated360RetinaRefineHead(Rotated360RetinaHead):
     """Rotational Anchor-based refine head. The difference from
     `RRetinaRefineHead` is that its loss_bbox requires bbox_pred, bbox_targets,
     pred_decode and targets_decode as inputs.
@@ -39,6 +39,11 @@ class KFIoURRetinaRefineHead(KFIoURRetinaHead):
                      type='DeltaXYWHABBoxCoder',
                      target_means=(.0, .0, .0, .0, .0),
                      target_stds=(1.0, 1.0, 1.0, 1.0, 1.0)),
+                 landm_coder=dict(
+                     type='DeltaTLTRCECoder',
+                     target_means=(.0, .0, .0, .0, .0),
+                     target_stds=(1.0, 1.0, 1.0, 1.0, 1.0)),
+                 loss_landm=dict(type='SmoothL1Loss', loss_weight=1.0),
                  init_cfg=dict(
                      type='Normal',
                      layer='Conv2d',
@@ -51,7 +56,7 @@ class KFIoURRetinaRefineHead(KFIoURRetinaHead):
                  **kwargs):
 
         self.bboxes_as_anchors = None
-        super(KFIoURRetinaRefineHead, self).__init__(
+        super(Rotated360RetinaRefineHead, self).__init__(
             num_classes=num_classes,
             in_channels=in_channels,
             stacked_convs=stacked_convs,
@@ -59,6 +64,8 @@ class KFIoURRetinaRefineHead(KFIoURRetinaHead):
             norm_cfg=norm_cfg,
             anchor_generator=anchor_generator,
             bbox_coder=bbox_coder,
+            landm_coder=landm_coder,
+            loss_landm=loss_landm,
             init_cfg=init_cfg,
             **kwargs)
 
@@ -136,26 +143,31 @@ class KFIoURRetinaRefineHead(KFIoURRetinaHead):
     def loss(self,
              cls_scores,
              bbox_preds,
+             landm_preds,
              gt_bboxes,
              gt_labels,
+             gt_landms,
              img_metas,
              rois=None,
              gt_bboxes_ignore=None):
         """Loss function of KFIoURRetinaRefineHead."""
         assert rois is not None
         self.bboxes_as_anchors = rois
-        return super(KFIoURRetinaRefineHead, self).loss(
+        return super(Rotated360RetinaRefineHead, self).loss(
             cls_scores=cls_scores,
             bbox_preds=bbox_preds,
+            landm_preds=landm_preds,
             gt_bboxes=gt_bboxes,
             gt_labels=gt_labels,
+            gt_landms=gt_landms,
             img_metas=img_metas,
             gt_bboxes_ignore=gt_bboxes_ignore)
 
-    @force_fp32(apply_to=('cls_scores', 'bbox_preds'))
+    @force_fp32(apply_to=('cls_scores', 'bbox_preds', 'landm_preds'))
     def get_bboxes(self,
                    cls_scores,
                    bbox_preds,
+                   landm_preds,
                    img_metas,
                    cfg=None,
                    rescale=False,
@@ -182,7 +194,7 @@ class KFIoURRetinaRefineHead(KFIoURRetinaHead):
                 corresponding box.
         """
         num_levels = len(cls_scores)
-        assert len(cls_scores) == len(bbox_preds)
+        assert len(cls_scores) == len(bbox_preds) == len(landm_preds)
         assert rois is not None
 
         result_list = []
@@ -194,9 +206,12 @@ class KFIoURRetinaRefineHead(KFIoURRetinaHead):
             bbox_pred_list = [
                 bbox_preds[i][img_id].detach() for i in range(num_levels)
             ]
+            landm_pred_list = [
+                landm_preds[i][img_id].detach() for i in range(num_levels)
+            ]
             img_shape = img_metas[img_id]['img_shape']
             scale_factor = img_metas[img_id]['scale_factor']
-            proposals = self._get_bboxes_single(cls_score_list, bbox_pred_list,
+            proposals = self._get_bboxes_single(cls_score_list, bbox_pred_list, landm_pred_list,
                                                 rois[img_id], img_shape,
                                                 scale_factor, cfg, rescale)
             result_list.append(proposals)

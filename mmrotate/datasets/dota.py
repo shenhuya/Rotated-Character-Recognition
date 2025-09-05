@@ -46,6 +46,7 @@ class DOTADataset(CustomDataset):
                  difficulty=100,
                  **kwargs):
         self.version = version
+        # print('version: ', self.version)
         self.difficulty = difficulty
 
         super(DOTADataset, self).__init__(ann_file, pipeline, **kwargs)
@@ -65,11 +66,15 @@ class DOTADataset(CustomDataset):
         ann_files = glob.glob(ann_folder + '/*.txt')
         data_infos = []
         if not ann_files:  # test phase
-            ann_files = glob.glob(ann_folder + '/*.png')
+            ann_files = glob.glob(ann_folder + '/*.bmp')
+            # ann_files = glob.glob(ann_folder + '/*.jpg')
+            # ann_files = glob.glob(ann_folder + '/*.png')
             for ann_file in ann_files:
                 data_info = {}
                 img_id = osp.split(ann_file)[1][:-4]
-                img_name = img_id + '.png'
+                # img_name = img_id + '.png'
+                img_name = img_id + '.bmp'
+                # img_name = img_id + '.jpg'
                 data_info['filename'] = img_name
                 data_info['ann'] = {}
                 data_info['ann']['bboxes'] = []
@@ -79,7 +84,9 @@ class DOTADataset(CustomDataset):
             for ann_file in ann_files:
                 data_info = {}
                 img_id = osp.split(ann_file)[1][:-4]
-                img_name = img_id + '.png'
+                # img_name = img_id + '.png'
+                # img_name = img_id + '.bmp'
+                img_name = img_id + '.jpg'
                 data_info['filename'] = img_name
                 data_info['ann'] = {}
                 gt_bboxes = []
@@ -88,7 +95,7 @@ class DOTADataset(CustomDataset):
                 gt_bboxes_ignore = []
                 gt_labels_ignore = []
                 gt_polygons_ignore = []
-
+                # print('img_name: ', img_name)
                 if os.path.getsize(ann_file) == 0 and self.filter_empty_gt:
                     continue
 
@@ -98,7 +105,9 @@ class DOTADataset(CustomDataset):
                         bbox_info = si.split()
                         poly = np.array(bbox_info[:8], dtype=np.float32)
                         try:
+                            # print('version: ', self.version)
                             x, y, w, h, a = poly2obb_np(poly, self.version)
+                            # print('a: ', a)
                         except:  # noqa: E722
                             continue
                         cls_name = bbox_info[8]

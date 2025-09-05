@@ -116,6 +116,7 @@ class RotatedRetinaHead(RotatedAnchorHead):
             reg_feat = reg_conv(reg_feat)
         cls_score = self.retina_cls(cls_feat)
         bbox_pred = self.retina_reg(reg_feat)
+        # print(bbox_pred.shape)
         return cls_score, bbox_pred
 
     @force_fp32(apply_to=('cls_scores', 'bbox_preds'))

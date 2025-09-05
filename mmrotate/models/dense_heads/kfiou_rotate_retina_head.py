@@ -95,10 +95,13 @@ class KFIoURRetinaHead(RotatedRetinaHead):
         bbox_targets = bbox_targets.reshape(-1, 5)
         bbox_weights = bbox_weights.reshape(-1, 5)
         bbox_pred = bbox_pred.permute(0, 2, 3, 1).reshape(-1, 5)
-
+        # print('bbox_pred: ', bbox_pred)
+        # print('bbox_targets: ', bbox_targets)
         anchors = anchors.reshape(-1, 5)
         bbox_pred_decode = self.bbox_coder.decode(anchors, bbox_pred)
         bbox_targets_decode = self.bbox_coder.decode(anchors, bbox_targets)
+        # print('bbox_pred_decode: ', bbox_pred_decode)
+        # print('bbox_targets_decode: ', bbox_targets_decode)
 
         loss_bbox = self.loss_bbox(
             bbox_pred,
@@ -107,4 +110,5 @@ class KFIoURRetinaHead(RotatedRetinaHead):
             pred_decode=bbox_pred_decode,
             targets_decode=bbox_targets_decode,
             avg_factor=num_total_samples)
+        # print('loss_bbox: ', loss_bbox)
         return loss_cls, loss_bbox

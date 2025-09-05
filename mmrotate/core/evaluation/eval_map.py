@@ -221,6 +221,7 @@ def eval_rbbox_map(det_results,
             'precision': precisions,
             'ap': ap
         })
+        # print(eval_results)
     pool.close()
     if scale_ranges is not None:
         # shape (num_classes, num_scales)

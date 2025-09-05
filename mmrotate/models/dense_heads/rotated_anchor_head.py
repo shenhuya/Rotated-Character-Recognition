@@ -126,6 +126,7 @@ class RotatedAnchorHead(BaseDenseHead):
         """
         cls_score = self.conv_cls(x)
         bbox_pred = self.conv_reg(x)
+        # print(bbox_pred.shape)
         return cls_score, bbox_pred
 
     def forward(self, feats):
@@ -252,7 +253,7 @@ class RotatedAnchorHead(BaseDenseHead):
         pos_inds = sampling_result.pos_inds
         neg_inds = sampling_result.neg_inds
         if len(pos_inds) > 0:
-            if not self.reg_decoded_bbox:
+            if not self.reg_decoded_bbox: #False
                 pos_bbox_targets = self.bbox_coder.encode(
                     sampling_result.pos_bboxes, sampling_result.pos_gt_bboxes)
             else:

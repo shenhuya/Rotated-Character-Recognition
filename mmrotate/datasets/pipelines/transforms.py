@@ -8,6 +8,9 @@ from mmdet.datasets.pipelines.transforms import (Mosaic, RandomCrop,
                                                  RandomFlip, Resize)
 from numpy import random
 
+from mmdet.datasets.pipelines.formatting import to_tensor
+from mmcv.parallel import DataContainer as DC
+
 from mmrotate.core import norm_angle, obb2poly_np, poly2obb_np
 from ..builder import ROTATED_PIPELINES
 
@@ -44,7 +47,58 @@ class RResize(Resize):
             bboxes[:, 1] *= h_scale
             bboxes[:, 2:4] *= np.sqrt(w_scale * h_scale)
             results[key] = bboxes.reshape(orig_shape)
+    
+    def _resize_landms(self, results):
+        # print('11111111')
+        for key in results.get('landm_fields', []):
+            landms = results[key]
+            w_scale, h_scale, _, _ = results['scale_factor']
+            # print('w_scale: ', w_scale)
+            # print('h_scale: ', h_scale)
+            landms[:, 0] *= w_scale
+            landms[:, 1] *= h_scale
+            landms[:, 2] *= w_scale
+            landms[:, 3] *= h_scale
+            landms[:, 4] *= w_scale
+            landms[:, 5] *= h_scale
+            results[key] = landms
+        
+    def __call__(self, results):
+        """Call function to resize images, bounding boxes, masks, semantic
+        segmentation map.
+        Args:
+            results (dict): Result dict from loading pipeline.
+        Returns:
+            dict: Resized results, 'img_shape', 'pad_shape', 'scale_factor', \
+                'keep_ratio' keys are added into result dict.
+        """
 
+        if 'scale' not in results:
+            if 'scale_factor' in results:
+                img_shape = results['img'].shape[:2]
+                scale_factor = results['scale_factor']
+                assert isinstance(scale_factor, float)
+                results['scale'] = tuple(
+                    [int(x * scale_factor) for x in img_shape][::-1])
+            else:
+                self._random_scale(results)
+        else:
+            if not self.override:
+                assert 'scale_factor' not in results, (
+                    'scale and scale_factor cannot be both set.')
+            else:
+                results.pop('scale')
+                if 'scale_factor' in results:
+                    results.pop('scale_factor')
+                self._random_scale(results)
+
+        self._resize_img(results)
+        self._resize_bboxes(results)
+        self._resize_landms(results)
+        self._resize_masks(results)
+        self._resize_seg(results)
+        # print('results_resize: ', results)
+        return results
 
 @ROTATED_PIPELINES.register_module()
 class RRandomFlip(RandomFlip):
@@ -91,10 +145,114 @@ class RRandomFlip(RandomFlip):
             flipped[rotated_flag, 4] = np.pi / 2 - bboxes[rotated_flag, 4]
             flipped[rotated_flag, 2] = bboxes[rotated_flag, 3]
             flipped[rotated_flag, 3] = bboxes[rotated_flag, 2]
+        elif self.version == '360':
+            # print('direction: ', direction)
+            # print('flipped1[:,4]', flipped[:,4])
+            if direction == 'horizontal':
+                if len(flipped) != 0:
+                    if flipped[0][4] < 0:
+                        flipped[:, 4] = -np.pi - flipped[:, 4]
+                    else:
+                        flipped[:, 4] = np.pi - flipped[:, 4]
+            elif direction == 'vertical':
+                flipped[:, 4] = -flipped[:, 4]
+            # print('flipped2[:,4]', flipped[:,4])
         else:
             flipped[:, 4] = norm_angle(np.pi - bboxes[:, 4], self.version)
         return flipped.reshape(orig_shape)
 
+    def landms_flip(self, landms, img_shape, direction):
+        """Flip landms horizontally or vertically.
+
+        Args:
+            landms(ndarray): shape (..., *k)
+            img_shape(tuple): (height, width)
+
+        Returns:
+            numpy.ndarray: Flipped landms.
+        """
+        # 需要测试看看landms进来时tensor大小
+        assert landms.shape[-1] % 6 == 0
+        orig_shape = landms.shape
+        landms = landms.reshape((-1, 6))
+        flipped = landms.copy()
+        # print('filp_landms')
+        if direction == 'horizontal':
+            flipped[:, 0] = img_shape[1] - landms[:, 0] - 1
+            flipped[:, 2] = img_shape[1] - landms[:, 2] - 1
+            flipped[:, 4] = img_shape[1] - landms[:, 4] - 1
+        elif direction == 'vertical':
+            flipped[:, 1] = img_shape[0] - landms[:, 1] - 1
+            flipped[:, 3] = img_shape[0] - landms[:, 3] - 1
+            flipped[:, 5] = img_shape[0] - landms[:, 5] - 1
+        elif direction == 'diagonal':
+            flipped[:, 0] = img_shape[1] - landms[:, 0] - 1
+            flipped[:, 1] = img_shape[0] - landms[:, 1] - 1
+            flipped[:, 2] = img_shape[1] - landms[:, 2] - 1
+            flipped[:, 3] = img_shape[0] - landms[:, 3] - 1
+            flipped[:, 4] = img_shape[1] - landms[:, 4] - 1
+            flipped[:, 5] = img_shape[0] - landms[:, 5] - 1
+        else:
+            raise ValueError(f'Invalid flipping direction "{direction}"')
+        return flipped.reshape(orig_shape)
+
+    def __call__(self, results):
+        """Call function to flip bounding boxes, masks, semantic segmentation
+        maps.
+        Args:
+            results (dict): Result dict from loading pipeline.
+        Returns:
+            dict: Flipped results, 'flip', 'flip_direction' keys are added \
+                into result dict.
+        """
+
+        if 'flip' not in results:
+            if isinstance(self.direction, list):
+                # None means non-flip
+                direction_list = self.direction + [None]
+            else:
+                # None means non-flip
+                direction_list = [self.direction, None]
+
+            if isinstance(self.flip_ratio, list):
+                non_flip_ratio = 1 - sum(self.flip_ratio)
+                flip_ratio_list = self.flip_ratio + [non_flip_ratio]
+            else:
+                non_flip_ratio = 1 - self.flip_ratio
+                # exclude non-flip
+                single_ratio = self.flip_ratio / (len(direction_list) - 1)
+                flip_ratio_list = [single_ratio] * (len(direction_list) -
+                                                    1) + [non_flip_ratio]
+
+            cur_dir = np.random.choice(direction_list, p=flip_ratio_list)
+
+            results['flip'] = cur_dir is not None
+        if 'flip_direction' not in results:
+            results['flip_direction'] = cur_dir
+        if results['flip']:
+            # flip image
+            for key in results.get('img_fields', ['img']):
+                results[key] = mmcv.imflip(
+                    results[key], direction=results['flip_direction'])
+            # flip bboxes
+            for key in results.get('bbox_fields', []):
+                results[key] = self.bbox_flip(results[key],
+                                              results['img_shape'],
+                                              results['flip_direction'])
+            # filp landms
+            # print('filp_results: ', results)
+            for key in  results.get('landm_fields', []):
+                results[key] = self.landms_flip(results[key],
+                                                results['img_shape'],
+                                                results['flip_direction'])
+            # flip masks
+            for key in results.get('mask_fields', []):
+                results[key] = results[key].flip(results['flip_direction'])
+            # flip segs
+            for key in results.get('seg_fields', []):
+                results[key] = mmcv.imflip(
+                    results[key], direction=results['flip_direction'])
+        return results
 
 @ROTATED_PIPELINES.register_module()
 class PolyRandomRotate(object):
@@ -544,3 +702,108 @@ class RMosaic(Mosaic):
                      (bbox_h > self.min_bbox_size)
         valid_inds = np.nonzero(valid_inds)[0]
         return bboxes[valid_inds], labels[valid_inds]
+
+
+@ROTATED_PIPELINES.register_module()
+class DefaultFormatBundle_:
+    """Default formatting bundle.
+
+    It simplifies the pipeline of formatting common fields, including "img",
+    "proposals", "gt_bboxes", "gt_labels", "gt_masks" and "gt_semantic_seg".
+    These fields are formatted as follows.
+
+    - img: (1)transpose, (2)to tensor, (3)to DataContainer (stack=True)
+    - proposals: (1)to tensor, (2)to DataContainer
+    - gt_bboxes: (1)to tensor, (2)to DataContainer
+    - gt_bboxes_ignore: (1)to tensor, (2)to DataContainer
+    - gt_landms: (1)to tensor, (2)to DataContainer
+    - gt_labels: (1)to tensor, (2)to DataContainer
+    - gt_masks: (1)to tensor, (2)to DataContainer (cpu_only=True)
+    - gt_semantic_seg: (1)unsqueeze dim-0 (2)to tensor, \
+                       (3)to DataContainer (stack=True)
+
+    Args:
+        img_to_float (bool): Whether to force the image to be converted to
+            float type. Default: True.
+        pad_val (dict): A dict for padding value in batch collating,
+            the default value is `dict(img=0, masks=0, seg=255)`.
+            Without this argument, the padding value of "gt_semantic_seg"
+            will be set to 0 by default, which should be 255.
+    """
+
+    def __init__(self,
+                 img_to_float=True,
+                 pad_val=dict(img=0, masks=0, seg=255)):
+        self.img_to_float = img_to_float
+        self.pad_val = pad_val
+
+    def __call__(self, results):
+        """Call function to transform and format common fields in results.
+
+        Args:
+            results (dict): Result dict contains the data to convert.
+
+        Returns:
+            dict: The result dict contains the data that is formatted with \
+                default bundle.
+        """
+
+        if 'img' in results:
+            img = results['img']
+            if self.img_to_float is True and img.dtype == np.uint8:
+                # Normally, image is of uint8 type without normalization.
+                # At this time, it needs to be forced to be converted to
+                # flot32, otherwise the model training and inference
+                # will be wrong. Only used for YOLOX currently .
+                img = img.astype(np.float32)
+            # add default meta keys
+            results = self._add_default_meta_keys(results)
+            if len(img.shape) < 3:
+                img = np.expand_dims(img, -1)
+            img = np.ascontiguousarray(img.transpose(2, 0, 1))
+            results['img'] = DC(
+                to_tensor(img), padding_value=self.pad_val['img'], stack=True)
+        for key in ['proposals', 'gt_bboxes', 'gt_landms', 'gt_bboxes_ignore', 'gt_labels']:
+            if key not in results:
+                continue
+            results[key] = DC(to_tensor(results[key]))
+        if 'gt_masks' in results:
+            results['gt_masks'] = DC(
+                results['gt_masks'],
+                padding_value=self.pad_val['masks'],
+                cpu_only=True)
+        if 'gt_semantic_seg' in results:
+            results['gt_semantic_seg'] = DC(
+                to_tensor(results['gt_semantic_seg'][None, ...]),
+                padding_value=self.pad_val['seg'],
+                stack=True)
+        return results
+
+    def _add_default_meta_keys(self, results):
+        """Add default meta keys.
+
+        We set default meta keys including `pad_shape`, `scale_factor` and
+        `img_norm_cfg` to avoid the case where no `Resize`, `Normalize` and
+        `Pad` are implemented during the whole pipeline.
+
+        Args:
+            results (dict): Result dict contains the data to convert.
+
+        Returns:
+            results (dict): Updated result dict contains the data to convert.
+        """
+        img = results['img']
+        results.setdefault('pad_shape', img.shape)
+        results.setdefault('scale_factor', 1.0)
+        num_channels = 1 if len(img.shape) < 3 else img.shape[2]
+        results.setdefault(
+            'img_norm_cfg',
+            dict(
+                mean=np.zeros(num_channels, dtype=np.float32),
+                std=np.ones(num_channels, dtype=np.float32),
+                to_rgb=False))
+        return results
+
+    def __repr__(self):
+        return self.__class__.__name__ + \
+               f'(img_to_float={self.img_to_float})'

@@ -10,6 +10,7 @@ from mmdet.models.roi_heads.roi_extractors.base_roi_extractor import \
 from ...builder import ROTATED_ROI_EXTRACTORS
 
 
+
 @ROTATED_ROI_EXTRACTORS.register_module()
 class RotatedSingleRoIExtractor(BaseRoIExtractor):
     """Extract RoI features from a single level feature map.
@@ -132,6 +133,9 @@ class RotatedSingleRoIExtractor(BaseRoIExtractor):
         for i in range(num_levels):
             mask = target_lvls == i
             inds = mask.nonzero(as_tuple=False).squeeze(1)
+            # print('roi_feats: ', roi_feats)
+            # print('roi_feats: ', len(roi_feats))
+            # print('inds: ', inds)
             if inds.numel() > 0:
                 rois_ = rois[inds]
                 roi_feats_t = self.roi_layers[i](feats[i], rois_)

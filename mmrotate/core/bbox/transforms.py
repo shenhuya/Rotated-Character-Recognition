@@ -69,6 +69,23 @@ def rbbox2result(bboxes, labels, num_classes):
         labels = labels.cpu().numpy()
         return [bboxes[labels == i, :] for i in range(num_classes)]
 
+def rbboxlandm2result(results, labels, num_classes):
+    """Convert detection results to a list of numpy arrays.
+
+    Args:
+        results (torch.Tensor): shape (n, 12)
+        labels (torch.Tensor): shape (n, )
+        num_classes (int): class number, including background class
+
+    Returns:
+        list(ndarray): bbox results of each class
+    """
+    if results.shape[0] == 0:
+        return [np.zeros((0, 12), dtype=np.float32) for _ in range(num_classes)]
+    else:
+        results = results.cpu().numpy()
+        labels = labels.cpu().numpy()
+        return [results[labels == i, :] for i in range(num_classes)]
 
 def rbbox2roi(bbox_list):
     """Convert a list of bboxes to roi format.
@@ -129,7 +146,11 @@ def poly2obb_np(polys, version='oc'):
         results = poly2obb_np_le135(polys)
     elif version == 'le90':
         results = poly2obb_np_le90(polys)
+    elif version == '360':
+        # print('111111')
+        results = poly2obb_np_oc(polys)
     else:
+        # print('222222')
         raise NotImplementedError
     return results
 
@@ -150,6 +171,8 @@ def obb2hbb(rbboxes, version='oc'):
         results = obb2hbb_le135(rbboxes)
     elif version == 'le90':
         results = obb2hbb_le90(rbboxes)
+    elif version == '360':
+        results = obb2hbb_360(rbboxes)
     else:
         raise NotImplementedError
     return results
@@ -417,6 +440,22 @@ def poly2obb_np_le90(poly):
     assert np.pi / 2 > a >= -np.pi / 2
     return x, y, w, h, a
 
+def poly2obb_np_360(poly):
+    """Convert polygons to oriented bounding boxes.
+
+    Args:
+        polys (ndarray): [x0,y0,x1,y1,x2,y2,x3,y3]
+
+    Returns:
+        obbs (ndarray): [x_ctr,y_ctr,w,h,angle]
+    """
+    bboxps = np.array(poly).reshape((4, 2))
+    rbbox = cv2.minAreaRect(bboxps)
+    x, y, w, h = rbbox[0][0], rbbox[0][1], rbbox[1][0], rbbox[1][1]
+    dx1 = poly[2] - poly[0]
+    dy1 = -poly[3] + poly[1]
+    a = math.atan2(dy1, dx1)
+    return x, y, w, h, a
 
 def obb2poly_oc(rboxes):
     """Convert oriented bounding boxes to polygons.
@@ -508,6 +547,7 @@ def obb2hbb_oc(rbboxes):
     Returns:
         hbbs (torch.Tensor): [x_ctr,y_ctr,w,h,pi/2]
     """
+    # print('rrboxes: ', rbboxes)
     w = rbboxes[:, 2::5]
     h = rbboxes[:, 3::5]
     a = rbboxes[:, 4::5]
@@ -519,6 +559,7 @@ def obb2hbb_oc(rbboxes):
     hbboxes[:, 2::5] = hbbox_h
     hbboxes[:, 3::5] = hbbox_w
     hbboxes[:, 4::5] = np.pi / 2
+    # print('hbboxes: ', hbboxes)
     return hbboxes
 
 
@@ -575,6 +616,43 @@ def obb2hbb_le90(obboxes):
     obboxes = torch.where((_w >= _h)[..., None], obboxes1, obboxes2)
     return obboxes
 
+def obb2hbb_360(rbboxes):
+    """Convert oriented bounding boxes to horizontal bounding boxes.
+
+    Args:
+        obbs (torch.Tensor): [x_ctr,y_ctr,w,h,angle]
+
+    Returns:
+        hbbs (torch.Tensor): [x_ctr,y_ctr,w,h,-pi/2]
+        hlandms(torch.Tensor): [x_topleft, y_topleft, x_topright, y_topright, x_ctr, y_ctr]
+    """
+    # print('rrboxes: ', rbboxes)
+    w = rbboxes[:, 2::5]
+    h = rbboxes[:, 3::5]
+    a = rbboxes[:, 4::5]
+    angle = rbboxes[0][4] / np.pi * 180
+    # print('angle: ', angle)
+    if 0 <= angle <= 90:
+        cosa = torch.cos(a)
+        sina = torch.sin(a)
+    elif 90 <= angle <= 180:
+        cosa = -torch.cos(a)
+        sina = torch.sin(a)
+    elif -180 <= angle < -90:
+        cosa = -torch.cos(a)
+        sina = -torch.sin(a)
+    elif -90 <= angle < 0:
+        # print('4444444')
+        cosa = torch.cos(a)
+        sina = -torch.sin(a)
+    hbbox_w = cosa * w + sina * h
+    hbbox_h = sina * w + cosa * h
+    hbboxes = rbboxes.clone().detach()
+    hbboxes[:, 2::5] = hbbox_h
+    hbboxes[:, 3::5] = hbbox_w
+    hbboxes[:, 4::5] = np.pi / 2
+    # print('hbboxes: ', hbboxes)
+    return hbboxes
 
 def hbb2obb_oc(hbboxes):
     """Convert horizontal bounding boxes to oriented bounding boxes.
@@ -863,6 +941,8 @@ def norm_angle(angle, angle_range):
         return (angle + np.pi / 4) % np.pi - np.pi / 4
     elif angle_range == 'le90':
         return (angle + np.pi / 2) % np.pi - np.pi / 2
+    elif angle_range == '360':
+        return angle
     else:
         print('Not yet implemented.')
 

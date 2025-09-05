@@ -1,3 +1,7 @@
+'''
+    将R3det_kfiou_In_r50_fpn_1x_dota_oc.py的backbone换成CSPDarknet
+    得到yolox_kfiou_In_r50_fpn_1x_GnagPi_oc.py
+'''
 # Copyright (c) SJTU. All rights reserved.
 import warnings
 
@@ -10,8 +14,8 @@ from .utils import FeatureRefineModule
 
 
 @ROTATED_DETECTORS.register_module()
-class R3Det(RotatedBaseDetector):
-    """Rotated Refinement RetinaNet."""
+class ReYOLOX(RotatedBaseDetector):
+    """Rotated Refinement YOLOX."""
 
     def __init__(self,
                  num_refine_stages,
@@ -24,7 +28,7 @@ class R3Det(RotatedBaseDetector):
                  test_cfg=None,
                  pretrained=None,
                  init_cfg=None):
-        super(R3Det, self).__init__(init_cfg)
+        super(ReYOLOX, self).__init__(init_cfg)
         if pretrained:
             warnings.warn('DeprecationWarning: pretrained is deprecated, '
                           'please use "init_cfg" instead')
@@ -52,6 +56,9 @@ class R3Det(RotatedBaseDetector):
     def extract_feat(self, img):
         """Directly extract features from the backbone+neck."""
         x = self.backbone(img)
+        # print(len(x))
+        # for i in range(len(x)):
+        #     print(x[i].shape)
         if self.with_neck:
             x = self.neck(x)
         return x
@@ -79,8 +86,6 @@ class R3Det(RotatedBaseDetector):
                       gt_labels,
                       gt_bboxes_ignore=None):
         """Forward function."""
-        # print('img_metas: ', img_metas)
-        # print('gt_bboxes: ', gt_bboxes)
         losses = dict()
         x = self.extract_feat(img)
 
@@ -127,8 +132,6 @@ class R3Det(RotatedBaseDetector):
         """
         x = self.extract_feat(img)
         outs = self.bbox_head(x)
-        # print('outs0: ', outs[0][0].shape)
-        # print('outs1: ', outs[1][0].shape)
         rois = self.bbox_head.filter_bboxes(*outs)
         # rois: list(indexed by images) of list(indexed by levels)
         for i in range(self.num_refine_stages):
